@@ -97,7 +97,7 @@ def build_gradio_app():
                 min_conf = gr.Slider(0, 1, value=0.60, step=0.01, label="最小置信度")
                 bubble_radius = gr.Slider(6, 48, value=18, step=1, label="气泡半径")
                 label_scale = gr.Slider(0.6, 2.0, value=1.2, step=0.05, label="数字字号缩放(半径×系数)")
-                anchor = gr.Radio(["tl","tr","bl","br"], value="tr", label="气泡锚点")
+                anchor = gr.Radio(["auto","tl","tr","bl","br"], value="auto", label="气泡锚点")
                 offset = gr.Textbox(value="10,-10", label="气泡偏移 dx,dy")
                 font_path = gr.Textbox(value="", label="可选：TTF字体路径(提高数字清晰度)")
                 exclude = gr.Textbox(value="", label="可选：排除区域 'x1,y1,x2,y2;...'（像素）")
@@ -153,35 +153,38 @@ def build_gradio_app():
             return anno, items, table, img, log
 
         def _on_click(evt: "gr.SelectData", mode: str, items: List[Dict[str,Any]],
-                      orig_img: Image.Image, label_scale: float, bubble_radius: int,
-                      anchor: str, offset: str, font_path: Optional[str], lang: str,
-                      prefill_patch: int, manual_text: str):
+              orig_img: Image.Image, label_scale: float, bubble_radius: int,
+              anchor: str, offset: str, font_path: Optional[str], lang: str,
+              prefill_patch: int, manual_text: str):
             if orig_img is None:
                 raise gr.Error("请先上传并运行一次 OCR")
+
+            # ------- 新增：把预览坐标 -> 原图坐标 -------
             x, y = float(evt.index[0]), float(evt.index[1])
+            W, H = orig_img.size
+            disp_w = None
+            disp_h = None
+            # gradio 里 evt.image 可能是 numpy 或 PIL，做两种兼容
+            try:
+                import numpy as _np  # 已在文件顶部 import 过就不会重复
+                if isinstance(evt.image, _np.ndarray):
+                    disp_h, disp_w = evt.image.shape[:2]
+                elif hasattr(evt.image, "size"):
+                    disp_w, disp_h = evt.image.size[0], evt.image.size[1]
+            except Exception:
+                if hasattr(evt.image, "size"):
+                    disp_w, disp_h = evt.image.size[0], evt.image.size[1]
+            if disp_w and disp_h and (disp_w != W or disp_h != H):
+                sx = W / float(disp_w)
+                sy = H / float(disp_h)
+                x *= sx
+                y *= sy
+            # ---------------------------------------
+
             try:
                 dx, dy = tuple(map(int, (offset or "10,-10").split(",")))
             except Exception:
                 dx, dy = (10, -10)
-            items = items or []
-            if mode == "添加":
-                txt = (manual_text or "").strip()
-                if not txt:
-                    try:
-                        txt = ocr_prefill_at(orig_img, x, y, lang=lang, patch=int(prefill_patch))
-                    except Exception:
-                        txt = ""
-                tp = classify_text(txt) if txt else "LEN"
-                box = [[x - 10, y - 5], [x + 10, y - 5], [x + 10, y + 5], [x - 10, y + 5]]
-                # 新点给一个新的 bubble_id（不打乱已有的自定义编号）
-                max_bid = max([it.get("bubble_id", 0) for it in items], default=0)
-                items.append({"bubble_id": max_bid + 1, "text": txt, "type": tp, "conf": 1.0, "box": box, "center": (x, y)})
-            else:
-                if items:
-                    dists = [(((it["center"][0]-x)**2 + (it["center"][1]-y)**2), k) for k,it in enumerate(items)]
-                    dists.sort(key=lambda z: z[0])
-                    idx = dists[0][1]
-                    items.pop(idx)
 
             # 仍按阅读顺序排序，但不重置 bubble_id
             items = sort_reading_order(items)
